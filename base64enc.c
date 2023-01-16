@@ -5,6 +5,8 @@
 #error "No support for uint8_t"
 #endif
 #include <string.h>
+#include <errno.h>
+#include <err.h>
 
 // Base 64 encoder
 int main(int argc, char *argv[])
@@ -13,6 +15,14 @@ int main(int argc, char *argv[])
     // With no FILE, or when FILE is -, read standard input
     // Otherwise, read the file specified by the first argument
     FILE *fp = NULL;
+
+    // Program prints error if invalid number of arguments is provided
+    if (argc > 2)
+    {
+        fprintf(stderr, "Invalid number of arguments! "
+                        "Usage: base64enc [FILE] or base64enc - for stdin.");
+        return 1;
+    }
 
     if (argc == 1 || strcmp(argv[1], "-") == 0)
     {
@@ -25,9 +35,9 @@ int main(int argc, char *argv[])
         fp = fopen(argv[1], "r");
     }
 
-    if (fp == NULL)
+    if (fp == NULL || ferror(fp) || feof(fp))
     {
-        fprintf(stderr, "Unable to open file %s for reading data to encode in base64", argv[1]);
+        fprintf(stderr, "Unable to open file '%s' for reading data to encode in base64!", argv[1]);
         return 1;
     }
 
@@ -37,13 +47,24 @@ int main(int argc, char *argv[])
 
     // Read the data in blocks of three characters at a time
     uint8_t block[3];
-    int numRead = 0;
-
-    int padding = 0;
+    int numRead = 0; // Number of characters read
+    int padding = 0; // Number of padding characters to add
 
     // Read the data in blocks of three characters at a time
-    while ((numRead = fread(block, 1, 3, fp)) > 0)
+    while (1)
     {
+        // Read the next block of data from the file
+        numRead = fread(block, 1, 3, fp);
+        // Program prints error if file/stdin read fails
+        if (ferror(fp) && !feof(fp))
+        {
+            err(errno, "fread");
+        }
+        if (numRead == 0 && feof(fp))
+        {
+            break;
+        }
+
         uint8_t b0 = block[0];
         uint8_t b1 = block[1];
         uint8_t b2 = block[2];
@@ -51,7 +72,9 @@ int main(int argc, char *argv[])
         // Encode the first 6 bits of the first character
         putchar(alphabet[b0 >> 2]);
 
-        // Encode the last 2 bits of the first character and the first 4 bits of the second character
+        // Encode the last 2 bits of the first character and the first 4 bits of the 
+        // second character and OR the two together
+        // 0x03 = 0 0 0 0   0 0 1 1
         putchar(alphabet[((b0 & 0x03) << 4) | (b1 >> 4)]);
 
         if (numRead == 1)
@@ -60,7 +83,9 @@ int main(int argc, char *argv[])
         }
         else
         {
-            // Encode the last 4 bits of the second character and the first 2 bits of the third character
+            // Encode the last 4 bits of the second character and the first 2 bits 
+            // of the third character
+            // 0x0F = 0 0 0 0   1 1 1 1
             putchar(alphabet[((b1 & 0x0F) << 2) | (b2 >> 6)]);
             if (numRead == 2)
             {
@@ -69,6 +94,7 @@ int main(int argc, char *argv[])
             else
             {
                 // Encode the last 6 bits of the third character
+                // 0x3F = 0 0 1 1   1 1 1 1
                 putchar(alphabet[b2 & 0x3F]);
             }
         }
@@ -98,7 +124,11 @@ int main(int argc, char *argv[])
         block[1] = 0;
         block[2] = 0;
     }
+    
+    // Append a newline to the end of the output
+    putchar('\n');
 
+    // Close the FILE*
     fclose(fp);
 
     return 0;
