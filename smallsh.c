@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <ctype.h>
+#include <stdint.h>
 
 #define MAXLENGTH 2048
 #define MAXARGS 512
@@ -39,15 +40,14 @@ struct command command;
 int childStatus;                 // Used to store the status of the child process
 int exit_status = 0;             // default exit status of last foreground command
 int processArray[PROCESS_LIMIT]; // Store process PIDs
-int proccesIter;                 // Keep track of where to place PID
+int processIter;                 // Keep track of where to place PID
 
 int command_prompt()
 {
     struct command firstCommand = {.args = {'\0'}, .background_mode = 0, .input_file = {'\0'}, .output_file = {'\0'}}; // Initialize blank command struct
     command = firstCommand;                                                                                            // Set global command struct to this blank command struct
-
-    fflush(stdout);                             // Flush stdout buffer
-    if (fgets(input, MAXLENGTH, stdin) == NULL) // Handle EOF
+    fflush(stdout);                                                                                                    // Flush stdout buffer
+    if (fgets(input, MAXLENGTH, stdin) == NULL)                                                                        // Handle EOF
     {
         if (feof(stdin))
         {
@@ -56,7 +56,7 @@ int command_prompt()
         else
         {
             perror("fgets");
-            exit(1);
+            exit(EXIT_FAILURE);
         }
     }
     if (input[0] == '#') // If the first character is a #, ignore the line
@@ -111,7 +111,7 @@ static void variable_expansion(char *token)
         if (!temp_tok)
         { // malloc error check
             perror("malloc");
-            exit(1);
+            exit(EXIT_FAILURE);
         }
         strcpy(temp_tok, home);      // copy home to temp_tok
         strcat(temp_tok, token + 1); // copy token to temp_tok, starting at index 1 to skip the ~
@@ -120,27 +120,29 @@ static void variable_expansion(char *token)
     }
 
     int pid = getpid();
-    char pid_str[6];
+    char pid_str[6] = "0";
     sprintf(pid_str, "%d", pid);
     char *p = strstr(token, "$$");
     while (p != NULL)
     {
-        int len = strlen(token) + strlen(pid_str) - 2;
-        char temp_tok[len + 1];
-        strncpy(temp_tok, token, p - token);
-        strcat(temp_tok, pid_str);
-        strcat(temp_tok, p + 2);
-        strcpy(token, temp_tok);
-        p = strstr(token, "$$");
+        // Length of PID=$$ + 666666
+        int len = strlen(token) + strlen(pid_str) - 2; // -2 to skip the $$ in the token
+        char *temp_tok = malloc(len + 1);            // +1 for null terminator
+        strncpy(temp_tok, token, p - token); // copy token to temp_tok, starting at index 0 and ending at index p - token
+        strcat(temp_tok, pid_str);           // copy pid_str to temp_tok
+        strcat(temp_tok, p + 2);             // copy token to temp_tok, starting at index p + 2 to skip the $$
+        strcpy(token, temp_tok);             // copy temp_tok to token
+        p = strstr(token, "$$");             // search for $$ in token
     }
 
-    char exit_status_str[6];
+    char exit_status_str[6] = "0";
     sprintf(exit_status_str, "%d", exit_status);
     char *q = strstr(token, "$?");
     while (q != NULL)
     {
         int len = strlen(token) + strlen(exit_status_str) - 2;
-        char temp_tok[len + 1];
+        // char temp_tok[len + 1];
+        char *temp_tok = malloc(len + 1);
         strncpy(temp_tok, token, q - token);
         strcat(temp_tok, exit_status_str);
         strcat(temp_tok, q + 2);
@@ -148,10 +150,14 @@ static void variable_expansion(char *token)
         q = strstr(token, "$?");
     }
 
-    char bg_pid_str[10] = ""; // default background process ID
-    if (proccesIter > 0)
+    char bg_pid_str[10];
+    if (processIter > 0)
     {
-        sprintf(bg_pid_str, "%d", processArray[proccesIter - 1]);
+        int bg_pid = processArray[processIter - 1];
+        if (bg_pid >= 0)
+        {
+            sprintf(bg_pid_str, "%d", bg_pid);
+        }
     } // if there is a background process, set the background process ID to the last process in the array
 
     char *r = strstr(token, "$!");
@@ -219,7 +225,7 @@ void execute_non_builtin()
     case -1:
         perror("fork() failed!\n");
         fflush(stdout);
-        exit(1);
+        exit(EXIT_FAILURE);
         break;
     case 0:
         if (command.input_file[0] != '\0')
@@ -229,7 +235,7 @@ void execute_non_builtin()
             {
                 perror("open() failed!\n");
                 fflush(stdout);
-                exit(1);
+                exit(EXIT_FAILURE);
             }
 
             dup2(input_fd, 0);                    // Redirect stdin to input file
@@ -243,7 +249,7 @@ void execute_non_builtin()
             {
                 perror("open() failed!\n");
                 fflush(stdout);
-                exit(1);
+                exit(EXIT_FAILURE);
             }
 
             dup2(output_fd, 1); // Redirect stdout to output file
@@ -263,8 +269,8 @@ void execute_non_builtin()
         // In the parent process
         if (command.background_mode == 1)
         {
-            processArray[proccesIter] = spawnPid; // Add child process to process array.
-            proccesIter += 1;
+            processArray[processIter] = spawnPid; // Add child process to process array.
+            processIter += 1;
             waitpid(spawnPid, &childStatus, WUNTRACED | WNOHANG); // Dont wait.
             exit_status = WEXITSTATUS(childStatus);
 
@@ -304,7 +310,7 @@ void execute_command()
         // If more than 1 argument, print error to stderr
         if (command.args[2] != NULL || isdigit(command.args[1][0]) == 0)
         {
-            printf(BOLD_RED "Error: exit command does not take any arguments\n" NC);
+            fprintf(stderr, BOLD_RED "Error: exit command does not take any arguments.\n" NC);
             return;
         }
         else
@@ -319,7 +325,7 @@ void execute_command()
         // If more than 1 argument, print error to stderr
         if (command.args[2] != NULL)
         {
-            fprintf(stderr, BOLD_RED "Error: cd command does not take more than one argument\n" NC);
+            fprintf(stderr, BOLD_RED "Error: cd command does not take more than one argument.\n" NC);
             return;
         }
         else
@@ -339,7 +345,7 @@ void execute_command()
                 chdir_error = chdir(new_dir);
                 if (chdir_error == -1)
                 {
-                    fprintf(stderr, BOLD_RED "Error: unable to change directory to %s\n" NC, new_dir);
+                    fprintf(stderr, BOLD_RED "Error: unable to change directory to %s.\n" NC, new_dir);
                     fflush(stdout);
                 }
             }
@@ -351,7 +357,7 @@ void execute_command()
                 chdir_error = chdir(new_dir);
                 if (chdir_error == -1)
                 {
-                    fprintf(stderr, BOLD_RED "Error: unable to change directory to %s\n" NC, new_dir);
+                    fprintf(stderr, BOLD_RED "Error: unable to change directory to %s.\n" NC, new_dir);
                     fflush(stdout);
                 }
             }
@@ -373,27 +379,28 @@ void execute_command()
 // Function to check for background processes and print their status
 void background_processes()
 {
-    for (int i = 0; i < proccesIter; i++)
+    for (int i = 0; i < processIter; i++)
     { // Go through our background processes
         if (waitpid(processArray[i], &childStatus, WNOHANG | WUNTRACED) > 0)
         {
             if (WIFSTOPPED(childStatus))
             {
-                printf(BOLD_GREEN "Child process %d stopped. Continuing.\n" NC, processArray[i]); // Child PID and signal
+                fprintf(stderr, "Child process %jd stopped. Continuing.\n", (intmax_t)processArray[i]); // Child PID and signal
                 fflush(stdout);
             }
 
             if (WIFSIGNALED(childStatus))
             { // check if child terminated with signal
 
-                printf(BOLD_GREEN "Child process %d done. Signaled %d.\n" NC, processArray[i], WTERMSIG(childStatus)); // Child PID and signal
+                fprintf(stderr, "Child process %jd done. Signaled %d.\n", (intmax_t)processArray[i], WTERMSIG(childStatus)); // Child PID and signal
                 fflush(stdout);
             }
 
             if (WIFEXITED(childStatus))
             { // Check if child process terminated normally
 
-                printf(BOLD_GREEN "Child process %d done. Exit status %d.\n" NC, processArray[i], WEXITSTATUS(childStatus)); // Child PID and exit status
+                fprintf(stderr,"Child process %jd done. Exit status %d.\n", (intmax_t)processArray[i], 
+                WEXITSTATUS(childStatus)); // Child PID and exit status
                 fflush(stdout);
             }
         }
